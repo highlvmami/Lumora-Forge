@@ -65,7 +65,6 @@ export default function Home() {
           <div className="flex flex-col items-center gap-6">
             {!loading && (
               user ? (
-                /* GÖRÜNTÜ HATASI DÜZELTİLEN BUTON */
                 <Link 
                   href="/create" 
                   className="group relative px-12 py-5 bg-white text-black rounded-full font-bold text-lg overflow-hidden transition-all hover:scale-105 active:scale-95 inline-block"
@@ -82,13 +81,12 @@ export default function Home() {
                     src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" 
                     className="w-5 h-5" 
                     alt="Google Logo" 
-                  />
+/>
                   Google ile Deneyin
                 </button>
               )
             )}
             
-            {/* GÖRÜNTÜ HATASI DÜZELTİLEN ALT LİNK */}
             {!user && (
                <Link href="/" className="mt-4 text-zinc-500 text-sm underline hover:text-white transition-colors">
                   Ana Sayfaya Dön
@@ -101,13 +99,10 @@ export default function Home() {
         </div>
       </section>
 
-      {/* --- MODÜL 1: ANLATI MOTORU (Story 1 & 2) --- */}
+      {/* --- MODÜL 1: ANLATI MOTORU --- */}
       <section className="py-32 px-10 border-t border-white/5 bg-gradient-to-b from-black to-[#0a0a0a]">
         <div className="max-w-7xl mx-auto grid md:grid-cols-2 gap-20 items-center">
           <div>
-            <div className="inline-block px-3 py-1 bg-purple-500/10 border border-purple-500/20 rounded-full text-[10px] text-purple-400 font-bold uppercase tracking-[0.2em] mb-6">
-              Story 01 & 02 • LLM Core
-            </div>
             <h2 className="text-4xl md:text-5xl font-bold mb-6 tracking-tight">Bilişsel Anlatı ve <br /> Veri Entegrasyonu</h2>
             <p className="text-zinc-400 text-lg leading-relaxed mb-8">
               Gelişmiş LLM mimarisi sayesinde yazdığınız basit fikirler, derinliği olan profesyonel senaryolara dönüşür. Her hikaye güvenli bir şekilde bulut veritabanına işlenir.
@@ -124,7 +119,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* --- MODÜL 2: GÖRSEL SENTEZ (Story 3) --- */}
+      {/* --- MODÜL 2: GÖRSEL SENTEZ --- */}
       <section className="py-32 px-10 bg-[#0a0a0a]">
         <div className="max-w-7xl mx-auto grid md:grid-cols-2 gap-20 items-center">
           <div className="order-2 md:order-1 aspect-video bg-zinc-900/50 rounded-[2rem] border border-white/5 flex items-center justify-center relative group overflow-hidden">
@@ -134,9 +129,6 @@ export default function Home() {
             </div>
           </div>
           <div className="order-1 md:order-2">
-            <div className="inline-block px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full text-[10px] text-blue-400 font-bold uppercase tracking-[0.2em] mb-6">
-              Story 03 • GenAI Visuals
-            </div>
             <h2 className="text-4xl md:text-5xl font-bold mb-6 tracking-tight">Nöral Görsel Dünyası</h2>
             <p className="text-zinc-400 text-lg leading-relaxed mb-8">
               Hikayenizin her sahnesi için en az 3 adet yapay zeka tabanlı görsel üretilir. Sahnenin duygusuna ve atmosferine göre görseller optimize edilir.
@@ -145,12 +137,9 @@ export default function Home() {
         </div>
       </section>
 
-      {/* --- MODÜL 3: SES VE VİDEO (Story 4, 5, 6 & 7) --- */}
+      {/* --- MODÜL 3: SES VE VİDEO --- */}
       <section className="py-32 px-10 bg-gradient-to-b from-[#0a0a0a] to-black">
         <div className="max-w-4xl mx-auto text-center mb-20">
-          <div className="inline-block px-3 py-1 bg-red-500/10 border border-red-500/20 rounded-full text-[10px] text-red-400 font-bold uppercase tracking-[0.2em] mb-6">
-            Story 04 - 07 • Cinematic Engine
-          </div>
           <h2 className="text-5xl md:text-6xl font-bold mb-8 tracking-tighter italic">Prodüksiyonun Sonu.</h2>
           <p className="text-zinc-500 text-lg">Seslendirme, video kurgu, efektler ve altyazılar... Hepsi tek bir işlemde birleşir.</p>
         </div>
@@ -179,13 +168,13 @@ export default function Home() {
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-12">
           <div className="text-center md:text-left">
             <div className="text-xl font-black tracking-widest mb-2">LUMORA</div>
-            <div className="text-[10px] text-zinc-600 tracking-[0.3em] uppercase">Scrum Methodology Proj. 2026</div>
+            <div className="text-[10px] text-zinc-600 tracking-[0.3em] uppercase">Powered by Next-Gen AI • 2026</div>
           </div>
           
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-            <StatBox label="Sprint" value="14 - 15" />
-            <StatBox label="Story Points" value="Active" />
-            <StatBox label="Efficiency" value="%100" />
+            <StatBox label="System" value="Active" />
+            <StatBox label="Latency" value="24ms" />
+            <StatBox label="Uptime" value="99.9%" />
             <StatBox label="AI Core" value="Stable" />
           </div>
         </div>
