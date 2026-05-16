@@ -15,13 +15,12 @@ export default function CreateProject() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isImgGenerating, setIsImgGenerating] = useState(false);
   
-  // Resimlerin yüklenme durumunu tek tek takip etmek için loader state'i
   const [images, setImages] = useState([null, null, null]);
   const [imageLoading, setImageLoading] = useState([false, false, false]);
 
   const router = useRouter();
 
-  // AUTH
+  // KULLANICI GİRİŞ KONTROLÜ
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u) router.push("/");
@@ -30,10 +29,9 @@ export default function CreateProject() {
     return () => unsub();
   }, [router]);
 
-  // STORY
+  // %100 TÜRKÇE HİKAYE ÜRETİMİ
   const generateStory = async () => {
-    if (!prompt) return alert("Konu yaz");
-
+    if (!prompt) return alert("Lütfen bir konu yazın.");
     setIsGenerating(true);
 
     try {
@@ -47,7 +45,9 @@ export default function CreateProject() {
         messages: [
           {
             role: "user",
-            content: `Kısa sinematik hikaye yaz. Konu: ${prompt} Uzunluk: ${length}`,
+            content: `Lütfen şu konu hakkında akıcı, betimlemeleri güçlü ve sinematik bir kısa hikaye yaz: "${prompt}". 
+            HİKAYE TAMAMEN TÜRKÇE OLMALIDIR. 
+            Hikaye uzunluğu yaklaşık ${length} uzunlukta olsun ve sahneleri birbirinden ayırt edebilmem için net cümlelerden oluşsun.`,
           },
         ],
       });
@@ -55,100 +55,139 @@ export default function CreateProject() {
       setStory(res.choices[0]?.message?.content || "");
     } catch (err) {
       console.error(err);
-      alert("Hikaye üretilemedi");
+      alert("Hikaye üretilirken bir hata oluştu.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // IMAGES - Doğrudan Güvenli URL Bağlantısı
-  const generateImages = () => {
-    if (!story) return alert("Önce hikaye oluştur");
+  // KESİNTİSİZ GÖRSEL ÜRETİMİ (SIRALI SİSTEM)
+  const generateImages = async () => {
+    if (!story) return alert("Önce hikaye oluşturmalısınız.");
 
     setIsImgGenerating(true);
-    setImageLoading([true, true, true]);
+    setImages([null, null, null]); // Önceki resimleri temizle
 
-    // Hikayeyi cümlelere böl
+    // Türkçe karakterleri güvenli URL formatına dönüştüren harita (Yapay zekanın sapıtmaması için)
+    const trMap = {
+      'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'I': 'I',
+      'i': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S',
+      'ü': 'u', 'Ü': 'U'
+    };
+
+    // Hikayeyi noktalardan cümlelere ayırıyoruz
     const scenes = story
       .split(".")
-      .filter((s) => s.trim().length > 15)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 15) // Çok kısa ve anlamsız bağlaç cümlelerini ele
       .slice(0, 3);
 
+    // Eğer 3 cümle çıkmadıysa yedeklerle doldur
     while (scenes.length < 3) {
-      scenes.push(scenes[scenes.length - 1] || story);
+      scenes.push(scenes[scenes.length - 1] || "Sinematik harika bir manzara");
     }
 
-    // Backend API'yi tamamen bypass edip direkt Pollinations linki üretiyoruz
-    const generatedUrls = scenes.map((scene, index) => {
-      // Kelimeleri temizle, sadece harf ve sayı kalsın
-      const cleanScene = encodeURIComponent(
-        scene.replace(/[\n\r]/g, " ").replace(/[^a-zA-Z0-9 ]/g, "").trim()
-      );
-      // Her istekte resim değişsin diye benzersiz bir seed ekliyoruz
-      const randomSeed = Math.floor(Math.random() * 100000);
-      return `https://image.pollinations.ai/p/${cleanScene}?width=1024&height=576&nologo=true&seed=${randomSeed}`;
-    });
+    const updatedImages = [null, null, null];
 
-    setImages(generatedUrls);
+    // ÖNEMLİ: İstekleri paralel değil, SIRAYLA (sekansiyel) atarak spam korumasını (402) engelliyoruz
+    for (let i = 0; i < scenes.length; i++) {
+      setImageLoading((prev) => {
+        const copy = [...prev];
+        copy[i] = true;
+        return copy;
+      });
+
+      // Cümleyi temizle: Türkçe karakterleri dönüştür, sadece harf/sayı kalsın
+      let safeText = scenes[i]
+        .replace(/[çÇğĞıİöÖşŞüÜ]/g, (m) => trMap[m])
+        .replace(/[^a-zA-Z0-9 ]/g, " ")
+        .slice(0, 150) // URL çok uzun olup sunucuyu patlatmasın
+        .trim();
+
+      const encodedPrompt = encodeURIComponent(safeText + ", cinematic photography, highly detailed, 8k resolution");
+      const randomSeed = Math.floor(Math.random() * 999999);
+      
+      // Tamamen ücretsiz, kota sınırı olmayan en stabil Flux modeli bağlantısı
+      const finalImgUrl = `https://image.pollinations.ai/p/${encodedPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true`;
+
+      try {
+        // Tarayıcının resmi arka planda indirmesini bekliyoruz
+        const res = await fetch(finalImgUrl);
+        if (res.ok) {
+          updatedImages[i] = finalImgUrl;
+          setImages([...updatedImages]);
+        } else {
+          // Sunucuda anlık dalgalanma olursa temel model linkini pasla
+          updatedImages[i] = `https://image.pollinations.ai/p/${encodedPrompt}?width=1024&height=576&seed=${randomSeed}`;
+          setImages([...updatedImages]);
+        }
+      } catch (error) {
+        console.error("Görsel yüklenirken hata oluştu:", error);
+      } finally {
+        setImageLoading((prev) => {
+          const copy = [...prev];
+          copy[i] = false;
+          return copy;
+        });
+      }
+
+      // Her resim arasında yarım saniye (700ms) mola vererek sunucu blokajını aş
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+
     setIsImgGenerating(false);
   };
 
-  // Kırık imajları engellemek için yüklenme bitiş takibi
-  const handleImageLoad = (index) => {
-    setImageLoading((prev) => {
-      const newState = [...prev];
-      newState[index] = false;
-      return newState;
-    });
-  };
-
-  // SAVE
+  // FIREBASE FIRESTORE KAYIT
   const saveToFirebase = async () => {
-    if (!story) return alert("Hikaye yok");
-
-    await addDoc(collection(db, "projects"), {
-      userId: user?.uid,
-      userName: user?.displayName || "Anonim",
-      prompt,
-      story,
-      length,
-      images, 
-      createdAt: serverTimestamp(),
-    });
-
-    alert("Kaydedildi");
+    if (!story) return alert("Kaydedilecek bir hikaye bulunamadı.");
+    try {
+      await addDoc(collection(db, "projects"), {
+        userId: user?.uid,
+        userName: user?.displayName || "Anonim Kullanıcı",
+        prompt,
+        story,
+        length,
+        images, 
+        createdAt: serverTimestamp(),
+      });
+      alert("Projeniz başarıyla veritabanına kaydedildi!");
+    } catch (e) {
+      console.error(e);
+      alert("Kaydedilirken bir hata oluştu.");
+    }
   };
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-12 pt-24">
-      {/* HEADER */}
-      <div className="max-w-6xl mx-auto flex justify-between mb-10">
-        <h1 className="text-3xl font-bold">LUMORA STUDIO</h1>
+      {/* ÜST MENÜ */}
+      <div className="max-w-6xl mx-auto flex justify-between mb-10 items-center">
+        <h1 className="text-3xl font-bold tracking-tighter">LUMORA STUDIO</h1>
         <button
           onClick={saveToFirebase}
-          className="px-5 py-2 bg-white text-black rounded-full text-xs font-bold"
+          className="px-6 py-2.5 bg-white text-black rounded-full text-xs font-bold hover:bg-zinc-200 transition"
         >
           KAYDET
         </button>
       </div>
 
       <div className="max-w-6xl mx-auto grid lg:grid-cols-3 gap-8">
-        {/* LEFT */}
+        {/* SOL TARAF: GİRDİ VE HİKAYE ALANI */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="p-6 bg-zinc-900 rounded-3xl">
+          <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Hikaye fikrini yaz..."
-              className="w-full bg-transparent text-xl outline-none h-24"
+              placeholder="Hikayenizin konusunu Türkçe olarak buraya yazın..."
+              className="w-full bg-transparent text-xl outline-none h-24 resize-none text-white placeholder-zinc-500"
             />
-            <div className="flex gap-2 mt-4">
+            <div className="flex gap-2 mt-4 items-center">
               {["kısa", "orta", "uzun"].map((l) => (
                 <button
                   key={l}
                   onClick={() => setLength(l)}
-                  className={`px-3 py-1 rounded-full text-xs ${
-                    length === l ? "bg-white text-black" : "bg-zinc-800"
+                  className={`px-4 py-1.5 rounded-full text-xs font-medium transition ${
+                    length === l ? "bg-white text-black" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
                   }`}
                 >
                   {l}
@@ -157,50 +196,45 @@ export default function CreateProject() {
               <button
                 onClick={generateStory}
                 disabled={isGenerating}
-                className="ml-auto px-5 py-2 bg-white text-black rounded-full text-xs font-bold"
+                className="ml-auto px-6 py-2 bg-white text-black rounded-full text-xs font-bold hover:bg-zinc-200 disabled:opacity-50 transition"
               >
-                {isGenerating ? "YAZILIYOR..." : "HİKAYE"}
+                {isGenerating ? "YAZILIYOR..." : "HİKAYE OLUŞTUR"}
               </button>
             </div>
           </div>
 
-          <div className="p-6 bg-zinc-900 rounded-3xl min-h-[300px]">
-            <pre className="whitespace-pre-wrap text-zinc-300">
-              {story || "Hikaye burada..."}
+          <div className="p-6 bg-zinc-900 rounded-3xl min-h-[350px] border border-zinc-800">
+            <pre className="whitespace-pre-wrap text-zinc-300 font-sans leading-relaxed">
+              {story || "Üretilen Türkçe hikaye içeriği burada görüntülenecek..."}
             </pre>
           </div>
         </div>
 
-        {/* RIGHT */}
+        {/* SAĞ TARAF: GÖRSEL SAHNELERİ */}
         <div className="space-y-6">
-          <div className="p-6 bg-zinc-900 rounded-3xl">
+          <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
             <div className="grid gap-4">
               {images.map((img, i) => (
                 <div
                   key={i}
-                  className="aspect-video bg-zinc-800 rounded-xl overflow-hidden relative flex items-center justify-center border border-zinc-700/50"
+                  className="aspect-video bg-zinc-950 rounded-2xl overflow-hidden relative flex items-center justify-center border border-zinc-800"
                 >
-                  {img && (
+                  {img ? (
                     <img
                       src={img}
                       alt={`Sahne ${i + 1}`}
-                      className={`w-full h-full object-cover transition-opacity duration-300 ${
-                        imageLoading[i] ? "opacity-0" : "opacity-100"
-                      }`}
-                      onLoad={() => handleImageLoad(i)}
-                      onError={(e) => {
-                        // Eğer link anlık çökerse otomatik reload tetikler
-                        e.target.src = img + "&retry=" + i;
-                      }}
+                      className="w-full h-full object-cover"
                     />
-                  )}
-                  
-                  {(imageLoading[i] || !img) && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-850 gap-2">
-                      <div className="w-5 h-5 border-2 border-t-transparent border-white rounded-full animate-spin"></div>
-                      <div className="text-[10px] text-zinc-500 tracking-wider uppercase">
-                        {img ? "Yapay zeka çiziyor..." : "Boş Sahne"}
-                      </div>
+                  ) : (
+                    <div className="text-xs text-zinc-600 flex flex-col items-center gap-3">
+                      {imageLoading[i] ? (
+                        <>
+                          <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span className="text-zinc-400 animate-pulse text-[11px] tracking-wider uppercase">Sahne {i+1} Çiziliyor...</span>
+                        </>
+                      ) : (
+                        <span className="tracking-wider uppercase text-zinc-500 text-[11px]">Boş Sahne {i + 1}</span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -210,9 +244,9 @@ export default function CreateProject() {
             <button
               onClick={generateImages}
               disabled={isImgGenerating || !story}
-              className="w-full mt-4 px-4 py-2 bg-white text-black rounded-full text-xs font-bold"
+              className="w-full mt-4 px-4 py-2.5 bg-white text-black rounded-full text-xs font-bold hover:bg-zinc-200 disabled:opacity-40 transition"
             >
-              GÖRSELLERİ ÜRET
+              {isImgGenerating ? "GÖRSELLER SIRAYLA ÇİZİLİYOR..." : "GÖRSELLERI ÜRET"}
             </button>
           </div>
         </div>
