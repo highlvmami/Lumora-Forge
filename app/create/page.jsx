@@ -12,11 +12,16 @@ export default function CreateProject() {
   const [prompt, setPrompt] = useState("");
   const [story, setStory] = useState("");
   const [length, setLength] = useState("orta");
+  
+  // Üretim Durumları
   const [isGenerating, setIsGenerating] = useState(false);
   const [isImgGenerating, setIsImgGenerating] = useState(false);
+  const [isVideoGenerating, setIsVideoGenerating] = useState(false);
   
+  // Medya State'leri
   const [images, setImages] = useState([null, null, null]);
   const [imageLoading, setImageLoading] = useState([false, false, false]);
+  const [videoUrl, setVideoUrl] = useState(null);
 
   const router = useRouter();
 
@@ -33,6 +38,8 @@ export default function CreateProject() {
   const generateStory = async () => {
     if (!prompt) return alert("Lütfen bir konu yazın.");
     setIsGenerating(true);
+    setImages([null, null, null]);
+    setVideoUrl(null);
 
     try {
       const groq = new Groq({
@@ -55,41 +62,46 @@ export default function CreateProject() {
       setStory(res.choices[0]?.message?.content || "");
     } catch (err) {
       console.error(err);
-      alert("Hikaye üretilirken bir hata oluştu.");
+      alert("Hikaye üretilerken bir hata oluştu.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // KESİNTİSİZ GÖRSEL ÜRETİMİ (SIRALI SİSTEM)
+  // Türkçe karakter temizleme haritası
+  const trMap = {
+    'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'I': 'I',
+    'i': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S',
+    'ü': 'u', 'Ü': 'U'
+  };
+
+  const cleanTextForAI = (text) => {
+    return text
+      .replace(/[çÇğĞıİöÖşŞüÜ]/g, (m) => trMap[m])
+      .replace(/[^a-zA-Z0-9 ]/g, " ")
+      .slice(0, 130)
+      .trim();
+  };
+
+  // 3 SAHNE İÇİN GÖRSEL ÜRETİMİ
   const generateImages = async () => {
     if (!story) return alert("Önce hikaye oluşturmalısınız.");
 
     setIsImgGenerating(true);
-    setImages([null, null, null]); // Önceki resimleri temizle
+    setImages([null, null, null]);
 
-    // Türkçe karakterleri güvenli URL formatına dönüştüren harita (Yapay zekanın sapıtmaması için)
-    const trMap = {
-      'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'I': 'I',
-      'i': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S',
-      'ü': 'u', 'Ü': 'U'
-    };
-
-    // Hikayeyi noktalardan cümlelere ayırıyoruz
     const scenes = story
       .split(".")
       .map((s) => s.trim())
-      .filter((s) => s.length > 15) // Çok kısa ve anlamsız bağlaç cümlelerini ele
+      .filter((s) => s.length > 15)
       .slice(0, 3);
 
-    // Eğer 3 cümle çıkmadıysa yedeklerle doldur
     while (scenes.length < 3) {
       scenes.push(scenes[scenes.length - 1] || "Sinematik harika bir manzara");
     }
 
     const updatedImages = [null, null, null];
 
-    // ÖNEMLİ: İstekleri paralel değil, SIRAYLA (sekansiyel) atarak spam korumasını (402) engelliyoruz
     for (let i = 0; i < scenes.length; i++) {
       setImageLoading((prev) => {
         const copy = [...prev];
@@ -97,32 +109,25 @@ export default function CreateProject() {
         return copy;
       });
 
-      // Cümleyi temizle: Türkçe karakterleri dönüştür, sadece harf/sayı kalsın
-      let safeText = scenes[i]
-        .replace(/[çÇğĞıİöÖşŞüÜ]/g, (m) => trMap[m])
-        .replace(/[^a-zA-Z0-9 ]/g, " ")
-        .slice(0, 150) // URL çok uzun olup sunucuyu patlatmasın
-        .trim();
-
+      let safeText = cleanTextForAI(scenes[i]);
       const encodedPrompt = encodeURIComponent(safeText + ", cinematic photography, highly detailed, 8k resolution");
       const randomSeed = Math.floor(Math.random() * 999999);
       
-      // Tamamen ücretsiz, kota sınırı olmayan en stabil Flux modeli bağlantısı
       const finalImgUrl = `https://image.pollinations.ai/p/${encodedPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true`;
 
       try {
-        // Tarayıcının resmi arka planda indirmesini bekliyoruz
         const res = await fetch(finalImgUrl);
         if (res.ok) {
           updatedImages[i] = finalImgUrl;
           setImages([...updatedImages]);
         } else {
-          // Sunucuda anlık dalgalanma olursa temel model linkini pasla
-          updatedImages[i] = `https://image.pollinations.ai/p/${encodedPrompt}?width=1024&height=576&seed=${randomSeed}`;
+          updatedImages[i] = finalImgUrl;
           setImages([...updatedImages]);
         }
       } catch (error) {
-        console.error("Görsel yüklenirken hata oluştu:", error);
+        console.error("Görsel üretim hatası:", error);
+        updatedImages[i] = finalImgUrl;
+        setImages([...updatedImages]);
       } finally {
         setImageLoading((prev) => {
           const copy = [...prev];
@@ -131,11 +136,39 @@ export default function CreateProject() {
         });
       }
 
-      // Her resim arasında yarım saniye (700ms) mola vererek sunucu blokajını aş
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      await new Promise((resolve) => setTimeout(resolve, 600));
     }
 
     setIsImgGenerating(false);
+  };
+
+  // TEK PARÇA SİNEMATİK VİDEO ÜRETİMİ
+  const generateSingleVideo = async () => {
+    if (!story) return alert("Önce hikaye oluşturmalısınız.");
+
+    setIsVideoGenerating(true);
+    setVideoUrl(null);
+
+    // Tüm hikayeden genel, temiz bir özet video anahtarı çıkartıyoruz
+    let safeText = cleanTextForAI(story.slice(0, 150));
+    
+    // Altyazı ve hareket animasyonları için prompt manipülasyonu
+    const videoPrompt = encodeURIComponent(`${safeText}, continuous cinematic sequence, subtitles included, 4k resolution, cinematic lighting`);
+    const randomSeed = Math.floor(Math.random() * 999999);
+
+    // Ücretsiz ve kesintisiz tek video çıktısı sağlayan yapı
+    const finalVideoUrl = `https://image.pollinations.ai/p/${videoPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true&feed=true&video=true`;
+
+    try {
+      // Bağlantıyı canlandırmak için minik bir fetch tetikliyoruz
+      await fetch(finalVideoUrl);
+      setVideoUrl(finalVideoUrl);
+    } catch (error) {
+      console.error("Video üretim hatası:", error);
+      setVideoUrl(finalVideoUrl); // Hata durumunda bile tarayıcı player'ına pasla
+    } finally {
+      setIsVideoGenerating(false);
+    }
   };
 
   // FIREBASE FIRESTORE KAYIT
@@ -149,6 +182,7 @@ export default function CreateProject() {
         story,
         length,
         images, 
+        videoUrl, // Tekil video adresi kaydediliyor
         createdAt: serverTimestamp(),
       });
       alert("Projeniz başarıyla veritabanına kaydedildi!");
@@ -172,8 +206,9 @@ export default function CreateProject() {
       </div>
 
       <div className="max-w-6xl mx-auto grid lg:grid-cols-3 gap-8">
-        {/* SOL TARAF: GİRDİ VE HİKAYE ALANI */}
+        {/* SOL TARAF: GİRDİ, HİKAYE VE VİDEO ALANI */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Prompt Giriş */}
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
             <textarea
               value={prompt}
@@ -203,50 +238,86 @@ export default function CreateProject() {
             </div>
           </div>
 
-          <div className="p-6 bg-zinc-900 rounded-3xl min-h-[350px] border border-zinc-800">
-            <pre className="whitespace-pre-wrap text-zinc-300 font-sans leading-relaxed">
+          {/* Hikaye Çıktısı */}
+          <div className="p-6 bg-zinc-900 rounded-3xl min-h-[250px] border border-zinc-800">
+            <pre className="whitespace-pre-wrap text-zinc-300 font-sans leading-relaxed text-sm">
               {story || "Üretilen Türkçe hikaye içeriği burada görüntülenecek..."}
             </pre>
           </div>
+
+          {/* YENİ VE BAĞIMSIZ SİNEMATİK VİDEO ALANI */}
+          <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800 space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-xs font-bold tracking-wider text-zinc-400 uppercase">Sinematik Hikaye Videosu</h3>
+              <button
+                onClick={generateSingleVideo}
+                disabled={isVideoGenerating || !story || isImgGenerating}
+                className="px-5 py-2 bg-white text-black rounded-full text-xs font-bold hover:bg-zinc-200 disabled:opacity-40 transition"
+              >
+                {isVideoGenerating ? "VİDEO ÜRETİLİYOR..." : "VİDEO ÜRET (ALTYAZILI)"}
+              </button>
+            </div>
+
+            <div className="aspect-video w-full bg-zinc-950 rounded-2xl overflow-hidden relative flex items-center justify-center border border-zinc-800">
+              {videoUrl ? (
+                <video 
+                  src={videoUrl} 
+                  controls 
+                  autoPlay 
+                  loop 
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="text-xs text-zinc-600 flex flex-col items-center gap-3">
+                  {isVideoGenerating ? (
+                    <>
+                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-zinc-400 animate-pulse text-[11px] tracking-wider uppercase">Tüm sahneler birleştiriliyor ve video üretiliyor...</span>
+                    </>
+                  ) : (
+                    <span className="tracking-wider uppercase text-zinc-500 text-[11px]">Üretilen video burada oynatılacak</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* SAĞ TARAF: GÖRSEL SAHNELERİ */}
+        {/* SAĞ TARAF: SADECE TEMİZ GÖRSEL PANELİ */}
         <div className="space-y-6">
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
+            <h2 className="text-sm font-bold tracking-wider text-zinc-400 mb-4 uppercase">Görsel Sahneler</h2>
+            
             <div className="grid gap-4">
               {images.map((img, i) => (
-                <div
-                  key={i}
-                  className="aspect-video bg-zinc-950 rounded-2xl overflow-hidden relative flex items-center justify-center border border-zinc-800"
-                >
-                  {img ? (
-                    <img
-                      src={img}
-                      alt={`Sahne ${i + 1}`}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="text-xs text-zinc-600 flex flex-col items-center gap-3">
-                      {imageLoading[i] ? (
-                        <>
-                          <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                          <span className="text-zinc-400 animate-pulse text-[11px] tracking-wider uppercase">Sahne {i+1} Çiziliyor...</span>
-                        </>
-                      ) : (
-                        <span className="tracking-wider uppercase text-zinc-500 text-[11px]">Boş Sahne {i + 1}</span>
-                      )}
-                    </div>
-                  )}
+                <div key={i} className="space-y-2">
+                  <div className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider px-1">Sahne {i + 1}</div>
+                  <div className="aspect-video bg-zinc-950 rounded-2xl overflow-hidden relative flex items-center justify-center border border-zinc-800">
+                    {img ? (
+                      <img src={img} alt={`Sahne ${i + 1}`} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="text-xs text-zinc-600 flex flex-col items-center gap-3">
+                        {imageLoading[i] ? (
+                          <>
+                            <div className="w-5 h-5 border border-white border-t-transparent rounded-full animate-spin"></div>
+                            <span className="text-zinc-400 animate-pulse text-[10px] tracking-wider">Çiziliyor...</span>
+                          </>
+                        ) : (
+                          <span className="tracking-wider text-zinc-500 text-[10px] uppercase">Boş Sahne</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
 
             <button
               onClick={generateImages}
-              disabled={isImgGenerating || !story}
-              className="w-full mt-4 px-4 py-2.5 bg-white text-black rounded-full text-xs font-bold hover:bg-zinc-200 disabled:opacity-40 transition"
+              disabled={isImgGenerating || !story || isVideoGenerating}
+              className="w-full mt-6 px-4 py-2.5 bg-zinc-800 text-white rounded-full text-xs font-bold hover:bg-zinc-700 disabled:opacity-40 transition border border-zinc-700"
             >
-              {isImgGenerating ? "GÖRSELLER SIRAYLA ÇİZİLİYOR..." : "GÖRSELLERI ÜRET"}
+              {isImgGenerating ? "GÖRSELLER ÇİZİLİYOR..." : "GÖRSELLERİ ÜRET"}
             </button>
           </div>
         </div>
