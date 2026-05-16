@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { auth, db } from "../../lib/firebase"; 
+import { auth, db } from "../../lib/firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
@@ -14,202 +14,206 @@ export default function CreateProject() {
   const [length, setLength] = useState("orta");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isImgGenerating, setIsImgGenerating] = useState(false);
+  
+  // Resimlerin yüklenme durumunu tek tek takip etmek için loader state'i
   const [images, setImages] = useState([null, null, null]);
+  const [imageLoading, setImageLoading] = useState([false, false, false]);
+
   const router = useRouter();
 
-  // Oturum Kontrolü
+  // AUTH
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (!currentUser) router.push("/");
-      setUser(currentUser);
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (!u) router.push("/");
+      setUser(u);
     });
-    return () => unsubscribe();
+    return () => unsub();
   }, [router]);
 
-  // STORY 1: Gerçek Yapay Zeka (Gemini) ile Hikaye Üretimi
+  // STORY
   const generateStory = async () => {
-    if (!prompt) return alert("Lütfen önce bir konu veya fikir yazın.");
-    
-    // API Key Kontrolü (Hata almamak için fonksiyon içinde okuyoruz)
-    const API_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY;
-    
-    if (!API_KEY) {
-      alert("Hata: API anahtarı bulunamadı. .env.local dosyasını ve NEXT_PUBLIC_ önekini kontrol edin.");
-      return;
-    }
+    if (!prompt) return alert("Konu yaz");
 
     setIsGenerating(true);
 
     try {
       const groq = new Groq({
-      apiKey: process.env.NEXT_PUBLIC_GROQ_API_KEY,
-       dangerouslyAllowBrowser: true,
+        apiKey: process.env.NEXT_PUBLIC_GROQ_API_KEY,
+        dangerouslyAllowBrowser: true,
       });
 
-      const chatCompletion = await groq.chat.completions.create({
-      messages: [
-      {
-        role: "user",
-        content: `Sen yaratıcı bir hikaye yazma yapay zekasısın.
-Kullanıcının verdiği fikre göre kısa, etkileyici bir hikaye yaz.
+      const res = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages: [
+          {
+            role: "user",
+            content: `Kısa sinematik hikaye yaz. Konu: ${prompt} Uzunluk: ${length}`,
+          },
+        ],
+      });
 
-Konu: ${prompt}
-Uzunluk: ${length}
-`
-      },
-      ],
-      model: "llama-3.3-70b-versatile",
-    });
-
-const text = chatCompletion.choices[0]?.message?.content;
-
-setStory(text);
-    } catch (error) {
-      console.error("AI Hatası:", error);
-      alert("Yapay zeka yanıt veremedi. Konsol kaydına bakın.");
+      setStory(res.choices[0]?.message?.content || "");
+    } catch (err) {
+      console.error(err);
+      alert("Hikaye üretilemedi");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // STORY 3: Görsel Üretme (Simülasyon)
-  const generateImages = async () => {
-    if (!story) return alert("Önce hikayeyi oluşturmalısınız!");
+  // IMAGES - Doğrudan Güvenli URL Bağlantısı
+  const generateImages = () => {
+    if (!story) return alert("Önce hikaye oluştur");
+
     setIsImgGenerating(true);
-    
-    setTimeout(() => {
-      setImages([
-        "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000",
-        "https://images.unsplash.com/photo-1614728263952-84ea256f9679?q=80&w=1000",
-        "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=1000"
-      ]);
-      setIsImgGenerating(false);
-    }, 2500);
+    setImageLoading([true, true, true]);
+
+    // Hikayeyi cümlelere böl
+    const scenes = story
+      .split(".")
+      .filter((s) => s.trim().length > 15)
+      .slice(0, 3);
+
+    while (scenes.length < 3) {
+      scenes.push(scenes[scenes.length - 1] || story);
+    }
+
+    // Backend API'yi tamamen bypass edip direkt Pollinations linki üretiyoruz
+    const generatedUrls = scenes.map((scene, index) => {
+      // Kelimeleri temizle, sadece harf ve sayı kalsın
+      const cleanScene = encodeURIComponent(
+        scene.replace(/[\n\r]/g, " ").replace(/[^a-zA-Z0-9 ]/g, "").trim()
+      );
+      // Her istekte resim değişsin diye benzersiz bir seed ekliyoruz
+      const randomSeed = Math.floor(Math.random() * 100000);
+      return `https://image.pollinations.ai/p/${cleanScene}?width=1024&height=576&nologo=true&seed=${randomSeed}`;
+    });
+
+    setImages(generatedUrls);
+    setIsImgGenerating(false);
   };
 
-  // STORY 2: Firebase Veri Tabanına Kaydetme
+  // Kırık imajları engellemek için yüklenme bitiş takibi
+  const handleImageLoad = (index) => {
+    setImageLoading((prev) => {
+      const newState = [...prev];
+      newState[index] = false;
+      return newState;
+    });
+  };
+
+  // SAVE
   const saveToFirebase = async () => {
-    if (!story) return alert("Önce bir hikaye oluşturmalısın!");
-    try {
-      await addDoc(collection(db, "projects"), {
-        userId: user?.uid,
-        userName: user?.displayName || "Anonim",
-        prompt: prompt,
-        story: story,
-        length: length,
-        images: images,
-        createdAt: serverTimestamp(),
-        status: "completed"
-      });
-      alert("Proje başarıyla buluta kaydedildi!");
-    } catch (error) {
-      console.error("Firebase Hatası:", error);
-      alert("Kaydedilirken bir hata oluştu.");
-    }
+    if (!story) return alert("Hikaye yok");
+
+    await addDoc(collection(db, "projects"), {
+      userId: user?.uid,
+      userName: user?.displayName || "Anonim",
+      prompt,
+      story,
+      length,
+      images, 
+      createdAt: serverTimestamp(),
+    });
+
+    alert("Kaydedildi");
   };
 
   return (
-    <main className="min-h-screen bg-[#020202] text-white p-6 md:p-12 pt-24 selection:bg-white/20">
-      
-      {/* Üst Panel */}
-      <div className="max-w-7xl mx-auto mb-12 flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-        <div>
-          <h1 className="text-4xl font-bold tracking-tighter italic uppercase">LUMORA STUDIO</h1>
-          <p className="text-zinc-500 text-[10px] uppercase tracking-[0.5em] mt-2 font-bold">Neural Generation Engine v1.5</p>
-        </div>
-        <div className="flex gap-4">
-          <button 
-            onClick={saveToFirebase}
-            className="px-10 py-3 bg-white text-black rounded-full text-[10px] font-bold tracking-widest hover:bg-zinc-200 transition-all shadow-[0_0_30px_rgba(255,255,255,0.1)]"
-          >
-            TASLAĞI KAYDET
-          </button>
-        </div>
+    <main className="min-h-screen bg-black text-white p-6 md:p-12 pt-24">
+      {/* HEADER */}
+      <div className="max-w-6xl mx-auto flex justify-between mb-10">
+        <h1 className="text-3xl font-bold">LUMORA STUDIO</h1>
+        <button
+          onClick={saveToFirebase}
+          className="px-5 py-2 bg-white text-black rounded-full text-xs font-bold"
+        >
+          KAYDET
+        </button>
       </div>
 
-      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
-        {/* Sol Kolon: Input & Hikaye */}
+      <div className="max-w-6xl mx-auto grid lg:grid-cols-3 gap-8">
+        {/* LEFT */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="bg-[#0a0a0a] border border-white/5 rounded-[2.5rem] p-8 md:p-10">
-            <label className="text-[10px] text-zinc-600 uppercase tracking-[0.3em] mb-6 block font-bold">01 / Concept Input</label>
-            <textarea 
+          <div className="p-6 bg-zinc-900 rounded-3xl">
+            <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Zihnindeki dünyayı birkaç kelimeyle tarif et..."
-              className="w-full bg-transparent border-none text-2xl md:text-3xl focus:ring-0 placeholder:text-zinc-900 resize-none h-28 mb-6 font-light"
+              placeholder="Hikaye fikrini yaz..."
+              className="w-full bg-transparent text-xl outline-none h-24"
             />
-            
-            <div className="flex flex-wrap items-center gap-4 border-t border-white/5 pt-8">
-              <div className="flex bg-zinc-900/50 p-1 rounded-full border border-white/5">
-                {["kısa", "orta", "uzun"].map((l) => (
-                  <button
-                    key={l}
-                    onClick={() => setLength(l)}
-                    className={`px-6 py-2 rounded-full text-[10px] uppercase tracking-widest transition-all ${
-                      length === l ? "bg-white text-black font-bold" : "text-zinc-600 hover:text-white"
-                    }`}
-                  >
-                    {l}
-                  </button>
-                ))}
-              </div>
-              <button 
+            <div className="flex gap-2 mt-4">
+              {["kısa", "orta", "uzun"].map((l) => (
+                <button
+                  key={l}
+                  onClick={() => setLength(l)}
+                  className={`px-3 py-1 rounded-full text-xs ${
+                    length === l ? "bg-white text-black" : "bg-zinc-800"
+                  }`}
+                >
+                  {l}
+                </button>
+              ))}
+              <button
                 onClick={generateStory}
                 disabled={isGenerating}
-                className="ml-auto px-10 py-4 bg-zinc-900 border border-white/10 rounded-full text-[10px] font-bold tracking-widest hover:bg-white hover:text-black transition-all disabled:opacity-50"
+                className="ml-auto px-5 py-2 bg-white text-black rounded-full text-xs font-bold"
               >
-                {isGenerating ? "ANALİZ EDİLİYOR..." : "ANLATIYI OLUŞTUR"}
+                {isGenerating ? "YAZILIYOR..." : "HİKAYE"}
               </button>
             </div>
           </div>
 
-          <div className="bg-[#0a0a0a] border border-white/5 rounded-[2.5rem] p-8 md:p-10 min-h-[450px]">
-            <label className="text-[10px] text-zinc-600 uppercase tracking-[0.3em] mb-8 block font-bold">02 / Neural Narrative</label>
-            <div className="text-zinc-400 leading-[1.8] italic text-lg md:text-xl font-light whitespace-pre-wrap">
-              {story || "Algoritmaların hikayeni yazmasını bekle..."}
-            </div>
+          <div className="p-6 bg-zinc-900 rounded-3xl min-h-[300px]">
+            <pre className="whitespace-pre-wrap text-zinc-300">
+              {story || "Hikaye burada..."}
+            </pre>
           </div>
         </div>
 
-        {/* Sağ Kolon: Görseller */}
+        {/* RIGHT */}
         <div className="space-y-6">
-          <div className="bg-[#0a0a0a] border border-white/5 rounded-[2.5rem] p-8">
-            <label className="text-[10px] text-zinc-600 uppercase tracking-[0.3em] mb-8 block font-bold">03 / Visual Scenes</label>
+          <div className="p-6 bg-zinc-900 rounded-3xl">
             <div className="grid gap-4">
               {images.map((img, i) => (
-                <div key={i} className="aspect-video bg-[#050505] border border-white/5 rounded-3xl flex items-center justify-center overflow-hidden relative group">
-                  {img ? (
-                    <img src={img} alt={`Scene ${i}`} className="w-full h-full object-cover animate-in fade-in duration-1000" />
-                  ) : (
-                    <span className="text-[9px] text-zinc-800 tracking-[0.4em] uppercase">Waiting</span>
+                <div
+                  key={i}
+                  className="aspect-video bg-zinc-800 rounded-xl overflow-hidden relative flex items-center justify-center border border-zinc-700/50"
+                >
+                  {img && (
+                    <img
+                      src={img}
+                      alt={`Sahne ${i + 1}`}
+                      className={`w-full h-full object-cover transition-opacity duration-300 ${
+                        imageLoading[i] ? "opacity-0" : "opacity-100"
+                      }`}
+                      onLoad={() => handleImageLoad(i)}
+                      onError={(e) => {
+                        // Eğer link anlık çökerse otomatik reload tetikler
+                        e.target.src = img + "&retry=" + i;
+                      }}
+                    />
+                  )}
+                  
+                  {(imageLoading[i] || !img) && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-850 gap-2">
+                      <div className="w-5 h-5 border-2 border-t-transparent border-white rounded-full animate-spin"></div>
+                      <div className="text-[10px] text-zinc-500 tracking-wider uppercase">
+                        {img ? "Yapay zeka çiziyor..." : "Boş Sahne"}
+                      </div>
+                    </div>
                   )}
                 </div>
               ))}
             </div>
-            <button 
+
+            <button
               onClick={generateImages}
               disabled={isImgGenerating || !story}
-              className="w-full mt-8 py-5 border border-white/10 rounded-3xl text-[10px] font-bold tracking-[0.3em] hover:bg-white hover:text-black transition-all disabled:opacity-20"
+              className="w-full mt-4 px-4 py-2 bg-white text-black rounded-full text-xs font-bold"
             >
-              {isImgGenerating ? "GÖRSELLER İŞLENİYOR..." : "GÖRSELLERİ ÜRET"}
+              GÖRSELLERİ ÜRET
             </button>
-          </div>
-
-          <div className="bg-[#ececec] text-black rounded-[2.5rem] p-10 flex flex-col justify-between min-h-[300px]">
-             <div>
-                <div className="flex justify-between items-center mb-10">
-                    <span className="text-[10px] font-black uppercase tracking-[0.3em]">Production Ready</span>
-                    <div className="w-2 h-2 bg-black rounded-full animate-ping"></div>
-                </div>
-                <h3 className="text-3xl font-bold tracking-tighter italic leading-none">VİDEO <br/> ÖNİZLEME</h3>
-             </div>
-             <button 
-                onClick={() => router.push("/preview")}
-                className="w-full py-5 bg-black text-white rounded-full text-[10px] font-bold tracking-[0.2em] hover:scale-105 transition-transform"
-             >
-                PREVIEW MODÜLÜNE GEÇ ↗
-             </button>
           </div>
         </div>
       </div>
