@@ -5,7 +5,22 @@ import { auth, db } from "../../lib/firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
-import Groq from "groq-sdk";
+
+// Türkçe karakter temizleme haritası (Bileşenin tamamen dışında)
+const trMap = {
+  'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'I': 'I',
+  'i': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S',
+  'ü': 'u', 'Ü': 'U'
+};
+
+const cleanTextForAI = (text) => {
+  if (!text) return "";
+  return text
+    .replace(/[çÇğĞıİöÖşŞüÜ]/g, (m) => trMap[m])
+    .replace(/[^a-zA-Z0-9 ]/g, " ")
+    .slice(0, 130)
+    .trim();
+};
 
 export default function CreateProject() {
   const [user, setUser] = useState(null);
@@ -34,7 +49,7 @@ export default function CreateProject() {
     return () => unsub();
   }, [router]);
 
-  // %100 TÜRKÇE HİKAYE ÜRETİMİ
+  // %100 TÜRKÇE HİKAYE ÜRETİMİ (GROQ API FETCH)
   const generateStory = async () => {
     if (!prompt) return alert("Lütfen bir konu yazın.");
     setIsGenerating(true);
@@ -42,48 +57,42 @@ export default function CreateProject() {
     setVideoUrl(null);
 
     try {
-      const groq = new Groq({
-        apiKey: process.env.NEXT_PUBLIC_GROQ_API_KEY,
-        dangerouslyAllowBrowser: true,
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.NEXT_PUBLIC_GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            {
+              role: "user",
+              content: `Lütfen şu konu hakkında akıcı, betimlemeleri güçlü ve sinematik bir kısa hikaye yaz: "${prompt}". 
+              HİKAYE TAMAMEN TÜRKÇE OLMALIDIR. 
+              Hikaye uzunluğu yaklaşık ${length} uzunlukta olsun ve sahneleri birbirinden ayırt edebilmem için net cümlelerden oluşsun.`,
+            }
+          ]
+        })
       });
 
-      const res = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          {
-            role: "user",
-            content: `Lütfen şu konu hakkında akıcı, betimlemeleri güçlü ve sinematik bir kısa hikaye yaz: "${prompt}". 
-            HİKAYE TAMAMEN TÜRKÇE OLMALIDIR. 
-            Hikaye uzunluğu yaklaşık ${length} uzunlukta olsun ve sahneleri birbirinden ayırt edebilmem için net cümlelerden oluşsun.`,
-          },
-        ],
-      });
-
-      setStory(res.choices[0]?.message?.content || "");
+      const data = await response.json();
+      
+      if (response.ok) {
+        setStory(data.choices[0]?.message?.content || "");
+      } else {
+        console.error("Groq API Hatası:", data);
+        alert("Hikaye motoru yanıt vermedi.");
+      }
     } catch (err) {
       console.error(err);
-      alert("Hikaye üretilerken bir hata oluştu.");
+      alert("Hikaye üretilerken sistem hatası oluştu.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // Türkçe karakter temizleme haritası
-  const trMap = {
-    'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'I': 'I',
-    'i': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S',
-    'ü': 'u', 'Ü': 'U'
-  };
-
-  const cleanTextForAI = (text) => {
-    return text
-      .replace(/[çÇğĞıİöÖşŞüÜ]/g, (m) => trMap[m])
-      .replace(/[^a-zA-Z0-9 ]/g, " ")
-      .slice(0, 130)
-      .trim();
-  };
-
-  // 3 SAHNE İÇİN GÖRSEL ÜRETİMİ
+  // 3 SAHNE İÇİN GÖRSEL ÜRETİMİ (BACKEND API BAĞLANTILI)
   const generateImages = async () => {
     if (!story) return alert("Önce hikaye oluşturmalısınız.");
 
@@ -109,26 +118,27 @@ export default function CreateProject() {
         return copy;
       });
 
-      let safeText = cleanTextForAI(scenes[i]);
-      const encodedPrompt = encodeURIComponent(safeText + ", cinematic photography, highly detailed, 8k resolution");
-      const randomSeed = Math.floor(Math.random() * 999999);
-      
-      const finalImgUrl = `https://image.pollinations.ai/p/${encodedPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true`;
-
       try {
-        const res = await fetch(finalImgUrl);
-        if (res.ok) {
-          updatedImages[i] = finalImgUrl;
+        const res = await fetch("/api/generate-image", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ prompt: scenes[i] }),
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.image) {
+          updatedImages[i] = data.image;
           setImages([...updatedImages]);
         } else {
-          updatedImages[i] = finalImgUrl;
-          setImages([...updatedImages]);
+          console.error(`Sahne ${i + 1} hatası:`, data.error);
         }
       } catch (error) {
-        console.error("Görsel üretim hatası:", error);
-        updatedImages[i] = finalImgUrl;
-        setImages([...updatedImages]);
+        console.error(`Sahne ${i + 1} çekilirken hata oluştu:`, error);
       } finally {
+        // Hatalı else bloğu tamamen kaldırıldı, temiz dürüst finally bloğu kalındı
         setImageLoading((prev) => {
           const copy = [...prev];
           copy[i] = false;
@@ -136,7 +146,7 @@ export default function CreateProject() {
         });
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
 
     setIsImgGenerating(false);
@@ -149,26 +159,16 @@ export default function CreateProject() {
     setIsVideoGenerating(true);
     setVideoUrl(null);
 
-    // Tüm hikayeden genel, temiz bir özet video anahtarı çıkartıyoruz
     let safeText = cleanTextForAI(story.slice(0, 150));
-    
-    // Altyazı ve hareket animasyonları için prompt manipülasyonu
     const videoPrompt = encodeURIComponent(`${safeText}, continuous cinematic sequence, subtitles included, 4k resolution, cinematic lighting`);
     const randomSeed = Math.floor(Math.random() * 999999);
 
-    // Ücretsiz ve kesintisiz tek video çıktısı sağlayan yapı
     const finalVideoUrl = `https://image.pollinations.ai/p/${videoPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true&feed=true&video=true`;
 
-    try {
-      // Bağlantıyı canlandırmak için minik bir fetch tetikliyoruz
-      await fetch(finalVideoUrl);
+    setTimeout(() => {
       setVideoUrl(finalVideoUrl);
-    } catch (error) {
-      console.error("Video üretim hatası:", error);
-      setVideoUrl(finalVideoUrl); // Hata durumunda bile tarayıcı player'ına pasla
-    } finally {
       setIsVideoGenerating(false);
-    }
+    }, 2000);
   };
 
   // FIREBASE FIRESTORE KAYIT
@@ -182,7 +182,7 @@ export default function CreateProject() {
         story,
         length,
         images, 
-        videoUrl, // Tekil video adresi kaydediliyor
+        videoUrl, 
         createdAt: serverTimestamp(),
       });
       alert("Projeniz başarıyla veritabanına kaydedildi!");
@@ -206,7 +206,7 @@ export default function CreateProject() {
       </div>
 
       <div className="max-w-6xl mx-auto grid lg:grid-cols-3 gap-8">
-        {/* SOL TARAF: GİRDİ, HİKAYE VE VİDEO ALANI */}
+        {/* SOL TARAF */}
         <div className="lg:col-span-2 space-y-6">
           {/* Prompt Giriş */}
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
@@ -245,7 +245,7 @@ export default function CreateProject() {
             </pre>
           </div>
 
-          {/* YENİ VE BAĞIMSIZ SİNEMATİK VİDEO ALANI */}
+          {/* VİDEO ALANI */}
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800 space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-xs font-bold tracking-wider text-zinc-400 uppercase">Sinematik Hikaye Videosu</h3>
@@ -272,7 +272,7 @@ export default function CreateProject() {
                   {isVideoGenerating ? (
                     <>
                       <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-zinc-400 animate-pulse text-[11px] tracking-wider uppercase">Tüm sahneler birleştiriliyor ve video üretiliyor...</span>
+                      <span className="text-zinc-400 animate-pulse text-[11px] tracking-wider uppercase">Tüm sahneler birleştiriliyor...</span>
                     </>
                   ) : (
                     <span className="tracking-wider uppercase text-zinc-500 text-[11px]">Üretilen video burada oynatılacak</span>
@@ -283,7 +283,7 @@ export default function CreateProject() {
           </div>
         </div>
 
-        {/* SAĞ TARAF: SADECE TEMİZ GÖRSEL PANELİ */}
+        {/* SAĞ TARAF */}
         <div className="space-y-6">
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
             <h2 className="text-sm font-bold tracking-wider text-zinc-400 mb-4 uppercase">Görsel Sahneler</h2>
