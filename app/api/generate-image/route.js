@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 
+// Türkçe karakter temizleme haritası
 const trMap = {
   'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'I': 'I',
   'i': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S',
   'ü': 'u', 'Ü': 'U'
 };
 
-const cleanTextForAI = (text) => {
+const cleanText = (text) => {
+  if (!text) return "";
   return text
     .replace(/[çÇğĞıİöÖşŞüÜ]/g, (m) => trMap[m])
     .replace(/[^a-zA-Z0-9 ]/g, " ")
@@ -22,70 +24,66 @@ export async function POST(req) {
       return NextResponse.json({ error: "Prompt boş olamaz" }, { status: 400 });
     }
 
-    let cleanPrompt = cleanTextForAI(prompt);
-    const finalPrompt = `${cleanPrompt}, cinematic photography, highly detailed, 8k resolution`;
-    const encodedPrompt = encodeURIComponent(finalPrompt);
+    const apiKey = process.env.NEXT_PUBLIC_GROQ_API_KEY || process.env.GROQ_API_KEY;
 
-    let response;
-    let isHuggingFaceSuccess = false;
-
-    // 1. SEÇENEK: HUGGING FACE API
-    try {
-      console.log("Hugging Face görsel üretimi deniyor...");
-      response = await fetch(
-        "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.HF_API_KEY}`,
-            "Content-Type": "application/json",
+    // 1. Groq kullanarak sahneyi silah barındırmayan temiz bir İngilizce prompta çeviriyoruz
+    const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.5,
+        messages: [
+          {
+            role: "system",
+            content: `You are a photo generation prompt assistant. Convert the given Turkish scene description into a highly detailed, cinematic English image prompt for Flux model.
+            CRITICAL RULES:
+            - Absolutely NO weapons, NO guns, NO firearms, NO violence, and NO fighting elements allowed.
+            - Ensure the scene is completely peaceful, harmonious, or professional depending on the context.
+            - Focus on environmental storytelling, characters, and beautiful lighting.
+            - Respond ONLY with the final English prompt. No extra text or explanations.`
           },
-          method: "POST",
-          body: JSON.stringify({ inputs: finalPrompt }),
-        }
-      );
+          {
+            role: "user",
+            content: `Turkish Scene: "${prompt}"`
+          }
+        ]
+      })
+    });
 
-      // Hugging Face bazen 200 dönse bile model yükleniyor hatası (JSON) verebilir.
-      // Gerçek bir resim gelip gelmediğini kontrol etmek için content-type'a bakıyoruz.
-      const contentType = response.headers.get("content-type");
-      if (response.ok && contentType && contentType.includes("image")) {
-        isHuggingFaceSuccess = true;
-        console.log("Görsel Hugging Face ile başarıyla üretildi!");
-      } else {
-        console.warn("Hugging Face resmi çizemedi veya model uykuda. Yedek plana geçiliyor...");
+    const groqData = await groqResponse.json();
+    let englishPrompt = groqData.choices[0]?.message?.content || "beautiful cinematic scenery, detailed background, 8k resolution";
+    
+    // Güvenliği iki katına çıkarmak için negatif yönlendirmeleri prompt sonuna ekliyoruz
+    englishPrompt = `${cleanText(englishPrompt)}, ultra detailed, photorealistic, peaceful composition, 8k resolution, completely free of weapons or firearms`;
+
+    const encodedPrompt = encodeURIComponent(englishPrompt);
+    const randomSeed = Math.floor(Math.random() * 999999);
+    
+    // 2. Pollinations AI ile görseli üretiyoruz
+    const modelUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true&enhance=false`;
+
+    const imageResponse = await fetch(modelUrl, {
+      method: "GET",
+      headers: {
+        "User-Agent": "Lumora-Forge-App"
       }
-    } catch (hfError) {
-      console.error("HF bağlantı hatası, yedek plana geçiliyor:", hfError);
+    });
+
+    if (!imageResponse.ok) {
+      return NextResponse.json({ error: "Görsel motoru yanıt vermedi" }, { status: imageResponse.status || 500 });
     }
 
-    // 2. SEÇENEK: YEDEK PLAN (Pollinations AI - URL üzerinden backend'de indirip base64 yapıyoruz)
-    if (!isHuggingFaceSuccess) {
-      console.log("Yedek plan: Pollinations AI üzerinden resim indiriliyor...");
-      const randomSeed = Math.floor(Math.random() * 999999);
-      const modelUrl = `https://image.pollinations.ai/p/${encodedPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true&private=true`;
-      
-      response = await fetch(modelUrl, {
-        method: "GET",
-        headers: {
-          "Accept": "image/png, image/jpeg, */*"
-        }
-      });
-    }
-
-    if (!response || !response.ok) {
-      return NextResponse.json(
-        { error: `Görsel motorları yanıt vermedi` },
-        { status: response?.status || 500 }
-      );
-    }
-
-    // Gelen ham resmi sorunsuz bir şekilde Buffer'a alıp base64'e çeviriyoruz
-    const buffer = await response.arrayBuffer();
+    const buffer = await imageResponse.arrayBuffer();
     const base64Image = Buffer.from(buffer).toString("base64");
 
-    return NextResponse.json({ image: `data:image/png;base64,${base64Image}` });
+    return NextResponse.json({ image: `data:image/jpeg;base64,${base64Image}` });
 
   } catch (e) {
-    console.error("Görsel Üretim Genel Hatası:", e);
+    console.error("Görsel Üretim Hatası:", e);
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

@@ -6,41 +6,22 @@ import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
 
-// Türkçe karakter temizleme haritası (Bileşenin tamamen dışında)
-const trMap = {
-  'ç': 'c', 'Ç': 'C', 'ğ': 'g', 'Ğ': 'G', 'ı': 'i', 'I': 'I',
-  'i': 'i', 'İ': 'I', 'ö': 'o', 'Ö': 'O', 'ş': 's', 'Ş': 'S',
-  'ü': 'u', 'Ü': 'U'
-};
-
-const cleanTextForAI = (text) => {
-  if (!text) return "";
-  return text
-    .replace(/[çÇğĞıİöÖşŞüÜ]/g, (m) => trMap[m])
-    .replace(/[^a-zA-Z0-9 ]/g, " ")
-    .slice(0, 130)
-    .trim();
-};
-
 export default function CreateProject() {
   const [user, setUser] = useState(null);
   const [prompt, setPrompt] = useState("");
   const [story, setStory] = useState("");
   const [length, setLength] = useState("orta");
   
-  // Üretim Durumları
   const [isGenerating, setIsGenerating] = useState(false);
   const [isImgGenerating, setIsImgGenerating] = useState(false);
   const [isVideoGenerating, setIsVideoGenerating] = useState(false);
   
-  // Medya State'leri
   const [images, setImages] = useState([null, null, null]);
   const [imageLoading, setImageLoading] = useState([false, false, false]);
   const [videoUrl, setVideoUrl] = useState(null);
 
   const router = useRouter();
 
-  // KULLANICI GİRİŞ KONTROLÜ
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u) router.push("/");
@@ -49,7 +30,7 @@ export default function CreateProject() {
     return () => unsub();
   }, [router]);
 
-  // %100 TÜRKÇE HİKAYE ÜRETİMİ (GROQ API FETCH)
+  // %100 TÜRKÇE AKICI HİKAYE ÜRETİMİ (ESKİ KALİTELİ HALİ)
   const generateStory = async () => {
     if (!prompt) return alert("Lütfen bir konu yazın.");
     setIsGenerating(true);
@@ -67,10 +48,12 @@ export default function CreateProject() {
           model: "llama-3.3-70b-versatile",
           messages: [
             {
+              role: "system",
+              content: `Sen usta bir Türk yazar ve edebiyatçısın. Görevin, sana verilen konularda mükemmel bir Türkçe ile akıcı kısa hikayeler yazmaktır. KESİNLİKLE araya İngilizce kelime karıştırma. Tüm kelimeler, ekler ve imla kuralları %100 doğru ve saf Türkçe olmalıdır.`
+            },
+            {
               role: "user",
-              content: `Lütfen şu konu hakkında akıcı, betimlemeleri güçlü ve sinematik bir kısa hikaye yaz: "${prompt}". 
-              HİKAYE TAMAMEN TÜRKÇE OLMALIDIR. 
-              Hikaye uzunluğu yaklaşık ${length} uzunlukta olsun ve sahneleri birbirinden ayırt edebilmem için net cümlelerden oluşsun.`,
+              content: `Konu: "${prompt}". Lütfen bu konu hakkında akıcı, betimlemeleri güçlü ve sinematik bir kısa hikaye yaz. Hikaye uzunluğu yaklaşık ${length} uzunlukta olsun. Cümleler net olsun ki rahatça sahnelere bölüp görsel üretebilelim.`,
             }
           ]
         })
@@ -86,13 +69,13 @@ export default function CreateProject() {
       }
     } catch (err) {
       console.error(err);
-      alert("Hikaye üretilerken sistem hatası oluştu.");
+      alert("Hikaye üretilirken sistem hatası oluştu.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // 3 SAHNE İÇİN GÖRSEL ÜRETİMİ (BACKEND API BAĞLANTILI)
+  // BACKEND ROUTE.JS DOSYASINA İSTEK ATARAK RESİM ÜRETME
   const generateImages = async () => {
     if (!story) return alert("Önce hikaye oluşturmalısınız.");
 
@@ -106,19 +89,16 @@ export default function CreateProject() {
       .slice(0, 3);
 
     while (scenes.length < 3) {
-      scenes.push(scenes[scenes.length - 1] || "Sinematik harika bir manzara");
+      scenes.push(scenes[scenes.length - 1] || "");
     }
 
     const updatedImages = [null, null, null];
 
     for (let i = 0; i < scenes.length; i++) {
-      setImageLoading((prev) => {
-        const copy = [...prev];
-        copy[i] = true;
-        return copy;
-      });
+      setImageLoading((prev) => { const copy = [...prev]; copy[i] = true; return copy; });
 
       try {
+        // Doğrudan kendi yazdığımız API rotasına (route.js) gidiyor
         const res = await fetch("/api/generate-image", {
           method: "POST",
           headers: {
@@ -130,7 +110,7 @@ export default function CreateProject() {
         const data = await res.json();
 
         if (res.ok && data.image) {
-          updatedImages[i] = data.image;
+          updatedImages[i] = data.image; // Gelen Base64 formatlı resmi state'e ekliyoruz
           setImages([...updatedImages]);
         } else {
           console.error(`Sahne ${i + 1} hatası:`, data.error);
@@ -138,32 +118,25 @@ export default function CreateProject() {
       } catch (error) {
         console.error(`Sahne ${i + 1} çekilirken hata oluştu:`, error);
       } finally {
-        // Hatalı else bloğu tamamen kaldırıldı, temiz dürüst finally bloğu kalındı
-        setImageLoading((prev) => {
-          const copy = [...prev];
-          copy[i] = false;
-          return copy;
-        });
+        setImageLoading((prev) => { const copy = [...prev]; copy[i] = false; return copy; });
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
     setIsImgGenerating(false);
   };
 
-  // TEK PARÇA SİNEMATİK VİDEO ÜRETİMİ
+  // VİDEO ÜRETİMİ
   const generateSingleVideo = async () => {
     if (!story) return alert("Önce hikaye oluşturmalısınız.");
 
     setIsVideoGenerating(true);
     setVideoUrl(null);
 
-    let safeText = cleanTextForAI(story.slice(0, 150));
-    const videoPrompt = encodeURIComponent(`${safeText}, continuous cinematic sequence, subtitles included, 4k resolution, cinematic lighting`);
+    const videoPrompt = encodeURIComponent(`${story.slice(0, 150)}, continuous cinematic sequence, 4k`);
     const randomSeed = Math.floor(Math.random() * 999999);
-
-    const finalVideoUrl = `https://image.pollinations.ai/p/${videoPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true&feed=true&video=true`;
+    const finalVideoUrl = `https://image.pollinations.ai/prompt/${videoPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true&feed=true&video=true`;
 
     setTimeout(() => {
       setVideoUrl(finalVideoUrl);
@@ -171,7 +144,6 @@ export default function CreateProject() {
     }, 2000);
   };
 
-  // FIREBASE FIRESTORE KAYIT
   const saveToFirebase = async () => {
     if (!story) return alert("Kaydedilecek bir hikaye bulunamadı.");
     try {
@@ -194,7 +166,6 @@ export default function CreateProject() {
 
   return (
     <main className="min-h-screen bg-black text-white p-6 md:p-12 pt-24">
-      {/* ÜST MENÜ */}
       <div className="max-w-6xl mx-auto flex justify-between mb-10 items-center">
         <h1 className="text-3xl font-bold tracking-tighter">LUMORA STUDIO</h1>
         <button
@@ -206,9 +177,7 @@ export default function CreateProject() {
       </div>
 
       <div className="max-w-6xl mx-auto grid lg:grid-cols-3 gap-8">
-        {/* SOL TARAF */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Prompt Giriş */}
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
             <textarea
               value={prompt}
@@ -238,14 +207,12 @@ export default function CreateProject() {
             </div>
           </div>
 
-          {/* Hikaye Çıktısı */}
           <div className="p-6 bg-zinc-900 rounded-3xl min-h-[250px] border border-zinc-800">
             <pre className="whitespace-pre-wrap text-zinc-300 font-sans leading-relaxed text-sm">
               {story || "Üretilen Türkçe hikaye içeriği burada görüntülenecek..."}
             </pre>
           </div>
 
-          {/* VİDEO ALANI */}
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800 space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-xs font-bold tracking-wider text-zinc-400 uppercase">Sinematik Hikaye Videosu</h3>
@@ -260,22 +227,16 @@ export default function CreateProject() {
 
             <div className="aspect-video w-full bg-zinc-950 rounded-2xl overflow-hidden relative flex items-center justify-center border border-zinc-800">
               {videoUrl ? (
-                <video 
-                  src={videoUrl} 
-                  controls 
-                  autoPlay 
-                  loop 
-                  className="w-full h-full object-cover"
-                />
+                <video src={videoUrl} controls autoPlay loop className="w-full h-full object-cover" />
               ) : (
                 <div className="text-xs text-zinc-600 flex flex-col items-center gap-3">
                   {isVideoGenerating ? (
                     <>
                       <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-zinc-400 animate-pulse text-[11px] tracking-wider uppercase">Tüm sahneler birleştiriliyor...</span>
+                      <span className="text-zinc-400 animate-pulse text-[11px] tracking-wider uppercase">Video oluşturuluyor...</span>
                     </>
                   ) : (
-                    <span className="tracking-wider uppercase text-zinc-500 text-[11px]">Üretilen video burada oynatılacak</span>
+                    <span className="tracking-wider uppercase text-zinc-500 text-[11px]">Video burada oynatılacak</span>
                   )}
                 </div>
               )}
@@ -283,7 +244,6 @@ export default function CreateProject() {
           </div>
         </div>
 
-        {/* SAĞ TARAF */}
         <div className="space-y-6">
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800">
             <h2 className="text-sm font-bold tracking-wider text-zinc-400 mb-4 uppercase">Görsel Sahneler</h2>
