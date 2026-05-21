@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { auth, db } from "../../lib/firebase";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
 
@@ -14,11 +14,19 @@ export default function CreateProject() {
   
   const [isGenerating, setIsGenerating] = useState(false);
   const [isImgGenerating, setIsImgGenerating] = useState(false);
-  const [isVideoGenerating, setIsVideoGenerating] = useState(false);
   
   const [images, setImages] = useState([null, null, null]);
   const [imageLoading, setImageLoading] = useState([false, false, false]);
-  const [videoUrl, setVideoUrl] = useState(null);
+
+  const [sentences, setSentences] = useState([]);
+  const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [activeScene, setActiveScene] = useState(0);
+  const [subtitle, setSubtitle] = useState("");
+  
+  const isPlayingRef = useRef(false);
+  const manualCancelRef = useRef(false);
 
   const router = useRouter();
 
@@ -27,15 +35,41 @@ export default function CreateProject() {
       if (!u) router.push("/");
       setUser(u);
     });
-    return () => unsub();
+    return () => {
+      unsub();
+      window.speechSynthesis.cancel();
+    };
   }, [router]);
 
-  // %100 TÜRKÇE AKICI HİKAYE ÜRETİMİ (ESKİ KALİTELİ HALİ)
+  useEffect(() => {
+    if (story) {
+      setSentences(story.match(/[^.!?]+[.!?]+/g) || [story]);
+      setCurrentSentenceIndex(0);
+    }
+  }, [story]);
+
+  const stopVideo = () => {
+    manualCancelRef.current = true;
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+    setIsPaused(false);
+    window.speechSynthesis.cancel();
+    setCurrentSentenceIndex(0);
+    setActiveScene(0);
+    setSubtitle("");
+  };
+
+  // 1. STORY: LLM ile program içerisinden prompt oluşturma
   const generateStory = async () => {
     if (!prompt) return alert("Lütfen bir konu yazın.");
     setIsGenerating(true);
     setImages([null, null, null]);
-    setVideoUrl(null);
+    stopVideo(); 
+
+    let lengthInstruction = "";
+    if (length === "kısa") lengthInstruction = "En fazla 3 cümleden oluşan, özet niteliğinde, ÇOK KISA";
+    else if (length === "orta") lengthInstruction = "Yaklaşık 6-7 cümleden oluşan, ORTA UZUNLUKTA";
+    else if (length === "uzun") lengthInstruction = "En az 12 cümleden oluşan, detaylı betimlemelere sahip UZUN";
 
     try {
       const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -46,14 +80,15 @@ export default function CreateProject() {
         },
         body: JSON.stringify({
           model: "llama-3.3-70b-versatile",
+          temperature: 0.6,
           messages: [
             {
               role: "system",
-              content: `Sen usta bir Türk yazar ve edebiyatçısın. Görevin, sana verilen konularda mükemmel bir Türkçe ile akıcı kısa hikayeler yazmaktır. KESİNLİKLE araya İngilizce kelime karıştırma. Tüm kelimeler, ekler ve imla kuralları %100 doğru ve saf Türkçe olmalıdır.`
+              content: `Sen usta bir Türk yazar ve edebiyatçısın. Görevin, sana verilen konularda mükemmel bir Türkçe ile akıcı hikayeler yazmaktır. ÇOK ÖNEMLİ KURAL: SADECE Türk alfabesi (Latin harfleri) kullan. KESİNLİKLE İngilizce kelimeler, Çince/Japonca karakterler (Örn: 世界) veya başka bir yabancı dile ait hiçbir sembol KULLANMA. Yazdığın her bir kelime %100 saf Türkçe olmak zorundadır.`
             },
             {
               role: "user",
-              content: `Konu: "${prompt}". Lütfen bu konu hakkında akıcı, betimlemeleri güçlü ve sinematik bir kısa hikaye yaz. Hikaye uzunluğu yaklaşık ${length} uzunlukta olsun. Cümleler net olsun ki rahatça sahnelere bölüp görsel üretebilelim.`,
+              content: `Konu: "${prompt}". Lütfen bu konu hakkında akıcı, betimlemeleri güçlü ve sinematik, ${lengthInstruction} bir hikaye yaz.`,
             }
           ]
         })
@@ -64,33 +99,24 @@ export default function CreateProject() {
       if (response.ok) {
         setStory(data.choices[0]?.message?.content || "");
       } else {
-        console.error("Groq API Hatası:", data);
         alert("Hikaye motoru yanıt vermedi.");
       }
     } catch (err) {
-      console.error(err);
       alert("Hikaye üretilirken sistem hatası oluştu.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  // BACKEND ROUTE.JS DOSYASINA İSTEK ATARAK RESİM ÜRETME
+  // 3. STORY: Hikaye temelli en az 3 görselin LLM'ile oluşturulması
   const generateImages = async () => {
     if (!story) return alert("Önce hikaye oluşturmalısınız.");
 
     setIsImgGenerating(true);
     setImages([null, null, null]);
 
-    const scenes = story
-      .split(".")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 15)
-      .slice(0, 3);
-
-    while (scenes.length < 3) {
-      scenes.push(scenes[scenes.length - 1] || "");
-    }
+    const scenes = story.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 15).slice(0, 3);
+    while (scenes.length < 3) scenes.push(scenes[scenes.length - 1] || "");
 
     const updatedImages = [null, null, null];
 
@@ -98,69 +124,134 @@ export default function CreateProject() {
       setImageLoading((prev) => { const copy = [...prev]; copy[i] = true; return copy; });
 
       try {
-        // Doğrudan kendi yazdığımız API rotasına (route.js) gidiyor
         const res = await fetch("/api/generate-image", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: scenes[i] }),
         });
 
         const data = await res.json();
-
         if (res.ok && data.image) {
-          updatedImages[i] = data.image; // Gelen Base64 formatlı resmi state'e ekliyoruz
+          updatedImages[i] = data.image;
           setImages([...updatedImages]);
-        } else {
-          console.error(`Sahne ${i + 1} hatası:`, data.error);
         }
       } catch (error) {
         console.error(`Sahne ${i + 1} çekilirken hata oluştu:`, error);
       } finally {
         setImageLoading((prev) => { const copy = [...prev]; copy[i] = false; return copy; });
       }
-
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-
     setIsImgGenerating(false);
   };
 
-  // VİDEO ÜRETİMİ
-  const generateSingleVideo = async () => {
-    if (!story) return alert("Önce hikaye oluşturmalısınız.");
+  // 4, 5, 6, 7. STORY: Sese dönüştürme, Ses ve Görsel, Efekt, Altyazı
+  const playAudio = (index) => {
+    if (!sentences[index]) return;
+    manualCancelRef.current = false;
 
-    setIsVideoGenerating(true);
-    setVideoUrl(null);
+    const text = sentences[index].trim();
+    setSubtitle(text);
 
-    const videoPrompt = encodeURIComponent(`${story.slice(0, 150)}, continuous cinematic sequence, 4k`);
-    const randomSeed = Math.floor(Math.random() * 999999);
-    const finalVideoUrl = `https://image.pollinations.ai/prompt/${videoPrompt}?width=1024&height=576&model=flux&seed=${randomSeed}&nologo=true&feed=true&video=true`;
+    const validImagesCount = images.filter(Boolean).length || 1;
+    const sentencesPerImage = Math.ceil(sentences.length / validImagesCount) || 1;
+    setActiveScene(Math.min(Math.floor(index / sentencesPerImage), validImagesCount - 1));
 
-    setTimeout(() => {
-      setVideoUrl(finalVideoUrl);
-      setIsVideoGenerating(false);
-    }, 2000);
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "tr-TR";
+    utterance.rate = 0.9;
+
+    utterance.onend = () => {
+      if (!manualCancelRef.current && isPlayingRef.current) {
+        if (index + 1 < sentences.length) {
+          setCurrentSentenceIndex(index + 1);
+          playAudio(index + 1);
+        } else {
+          stopVideo();
+        }
+      }
+    };
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
   };
 
+  const togglePlayPause = () => {
+    if (!images[0]) return alert("Önce hikaye ve görseller oluşturulmalı!");
+    
+    if (!isPlaying) {
+      setIsPlaying(true);
+      isPlayingRef.current = true;
+      setIsPaused(false);
+      playAudio(currentSentenceIndex);
+    } else {
+      if (isPaused) {
+        window.speechSynthesis.resume();
+        setIsPaused(false);
+      } else {
+        window.speechSynthesis.pause();
+        setIsPaused(true);
+      }
+    }
+  };
+
+  const handleNext = () => {
+    if (currentSentenceIndex < sentences.length - 1) {
+      manualCancelRef.current = true;
+      window.speechSynthesis.cancel();
+      const nextIdx = currentSentenceIndex + 1;
+      setCurrentSentenceIndex(nextIdx);
+      
+      if (isPlaying && !isPaused) {
+        setTimeout(() => playAudio(nextIdx), 100);
+      } else {
+        updateSceneAndSubtitle(nextIdx);
+      }
+    }
+  };
+
+  const handlePrev = () => {
+    if (currentSentenceIndex > 0) {
+      manualCancelRef.current = true;
+      window.speechSynthesis.cancel();
+      const prevIdx = currentSentenceIndex - 1;
+      setCurrentSentenceIndex(prevIdx);
+      
+      if (isPlaying && !isPaused) {
+        setTimeout(() => playAudio(prevIdx), 100);
+      } else {
+        updateSceneAndSubtitle(prevIdx);
+      }
+    }
+  };
+
+  const updateSceneAndSubtitle = (index) => {
+    setSubtitle(sentences[index]?.trim() || "");
+    const validImagesCount = images.filter(Boolean).length || 1;
+    const sentencesPerImage = Math.ceil(sentences.length / validImagesCount) || 1;
+    setActiveScene(Math.min(Math.floor(index / sentencesPerImage), validImagesCount - 1));
+  };
+
+  // 2. STORY: Oluşan hikayenin veri tabanına kaydedilmesi
   const saveToFirebase = async () => {
     if (!story) return alert("Kaydedilecek bir hikaye bulunamadı.");
+
     try {
-      await addDoc(collection(db, "projects"), {
-        userId: user?.uid,
+      const projectData = {
+        userId: user?.uid || "anonim_kullanici",
         userName: user?.displayName || "Anonim Kullanıcı",
-        prompt,
-        story,
-        length,
-        images, 
-        videoUrl, 
-        createdAt: serverTimestamp(),
-      });
+        prompt: prompt || "Konu belirtilmedi",
+        story: story,
+        length: length || "orta",
+        images: images.map((img) => img || ""), 
+        createdAt: new Date().toISOString() 
+      };
+
+      await addDoc(collection(db, "projects"), projectData);
       alert("Projeniz başarıyla veritabanına kaydedildi!");
     } catch (e) {
-      console.error(e);
-      alert("Kaydedilirken bir hata oluştu.");
+      console.error("Firebase Hatası:", e);
+      alert(`Kaydedilirken bir hata oluştu: ${e.message}`);
     }
   };
 
@@ -207,7 +298,7 @@ export default function CreateProject() {
             </div>
           </div>
 
-          <div className="p-6 bg-zinc-900 rounded-3xl min-h-[250px] border border-zinc-800">
+          <div className="p-6 bg-zinc-900 rounded-3xl min-h-[250px] border border-zinc-800 relative">
             <pre className="whitespace-pre-wrap text-zinc-300 font-sans leading-relaxed text-sm">
               {story || "Üretilen Türkçe hikaye içeriği burada görüntülenecek..."}
             </pre>
@@ -216,30 +307,57 @@ export default function CreateProject() {
           <div className="p-6 bg-zinc-900 rounded-3xl border border-zinc-800 space-y-4">
             <div className="flex justify-between items-center">
               <h3 className="text-xs font-bold tracking-wider text-zinc-400 uppercase">Sinematik Hikaye Videosu</h3>
-              <button
-                onClick={generateSingleVideo}
-                disabled={isVideoGenerating || !story || isImgGenerating}
-                className="px-5 py-2 bg-white text-black rounded-full text-xs font-bold hover:bg-zinc-200 disabled:opacity-40 transition"
-              >
-                {isVideoGenerating ? "VİDEO ÜRETİLİYOR..." : "VİDEO ÜRET (ALTYAZILI)"}
-              </button>
+              <span className="text-xs font-mono text-zinc-500">
+                {sentences.length > 0 ? `Sahne ${currentSentenceIndex + 1} / ${sentences.length}` : ""}
+              </span>
             </div>
 
-            <div className="aspect-video w-full bg-zinc-950 rounded-2xl overflow-hidden relative flex items-center justify-center border border-zinc-800">
-              {videoUrl ? (
-                <video src={videoUrl} controls autoPlay loop className="w-full h-full object-cover" />
-              ) : (
-                <div className="text-xs text-zinc-600 flex flex-col items-center gap-3">
-                  {isVideoGenerating ? (
-                    <>
-                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span className="text-zinc-400 animate-pulse text-[11px] tracking-wider uppercase">Video oluşturuluyor...</span>
-                    </>
-                  ) : (
-                    <span className="tracking-wider uppercase text-zinc-500 text-[11px]">Video burada oynatılacak</span>
+            <div className="aspect-video w-full bg-black rounded-2xl overflow-hidden relative border border-zinc-800 shadow-2xl">
+              {images[0] ? (
+                <>
+                  {images.map((img, idx) => (
+                    img && (
+                      <img 
+                        key={idx}
+                        src={img} 
+                        className={`absolute inset-0 w-full h-full object-cover transition-all duration-[2000ms] ease-in-out ${
+                          activeScene === idx 
+                            ? "opacity-100 scale-105" 
+                            : "opacity-0 scale-100"   
+                        }`}
+                        alt="Sahne" 
+                      />
+                    )
+                  ))}
+
+                  {(isPlaying || subtitle) && (
+                    <div className="absolute bottom-6 left-0 right-0 px-8 text-center z-10 transition-opacity duration-300">
+                      <span className="bg-black/60 text-yellow-400 font-bold px-4 py-2 rounded text-lg lg:text-xl drop-shadow-md border border-white/10">
+                        {subtitle}
+                      </span>
+                    </div>
                   )}
+                </>
+              ) : (
+                <div className="flex w-full h-full items-center justify-center text-xs text-zinc-600 uppercase tracking-widest text-center px-4">
+                  Görseller üretildiğinde video burada izlenebilir
                 </div>
               )}
+            </div>
+
+            <div className="flex items-center justify-center gap-6 mt-4 bg-zinc-950 p-3 rounded-full border border-zinc-800 w-max mx-auto">
+              <button onClick={handlePrev} disabled={!images[0] || currentSentenceIndex === 0} className="text-xl hover:text-white text-zinc-500 disabled:opacity-30 transition">
+                ⏮
+              </button>
+              <button onClick={togglePlayPause} disabled={!images[0]} className="text-3xl hover:text-white text-white disabled:opacity-30 transition w-8 flex justify-center">
+                {!isPlaying || isPaused ? "▶" : "⏸"}
+              </button>
+              <button onClick={stopVideo} disabled={!isPlaying && !isPaused && currentSentenceIndex === 0} className="text-xl hover:text-red-500 text-zinc-500 disabled:opacity-30 transition">
+                ⏹
+              </button>
+              <button onClick={handleNext} disabled={!images[0] || currentSentenceIndex === sentences.length - 1} className="text-xl hover:text-white text-zinc-500 disabled:opacity-30 transition">
+                ⏭
+              </button>
             </div>
           </div>
         </div>
@@ -274,7 +392,7 @@ export default function CreateProject() {
 
             <button
               onClick={generateImages}
-              disabled={isImgGenerating || !story || isVideoGenerating}
+              disabled={isImgGenerating || !story || (isPlaying && !isPaused)}
               className="w-full mt-6 px-4 py-2.5 bg-zinc-800 text-white rounded-full text-xs font-bold hover:bg-zinc-700 disabled:opacity-40 transition border border-zinc-700"
             >
               {isImgGenerating ? "GÖRSELLER ÇİZİLİYOR..." : "GÖRSELLERİ ÜRET"}
